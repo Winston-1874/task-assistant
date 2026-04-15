@@ -70,15 +70,16 @@ async def _handle_new_task(
         logger.error("Réseau LLM mort lors de la classification: %s", e)
         return _error_html("Service LLM indisponible — message non sauvegardé. Réessaie dans quelques instants.")
 
+    resolved_category = _resolve_category(classification.category)
     task = Task(
         title=message[:200],
-        category=classification.category,
+        category=resolved_category,
         context_id=classification.context_id,
         urgency=classification.urgency,
         due_date=classification.due_date,
         estimated_minutes=classification.estimated_minutes,
         tags=json.dumps(classification.tags) if classification.tags else None,
-        needs_review=1 if classification.confidence < 0.7 else 0,
+        needs_review=1 if (classification.confidence < 0.7 or resolved_category is None) else 0,
         llm_confidence=classification.confidence,
         llm_reasoning=classification.reasoning,
         llm_raw_response=llm_result.raw_json if llm_result else None,
@@ -97,6 +98,13 @@ async def _handle_new_task(
         "fragments/task_card.html",
         {"task": task, "pending": pending, "today": date.today()},
     )
+
+
+def _resolve_category(category: str | None) -> str | None:
+    """Retourne None si la catégorie est un préfixe NEW: (LLM hallucination) ou déjà None."""
+    if category and category.startswith("NEW:"):
+        return None
+    return category
 
 
 def _error_html(message: str) -> HTMLResponse:

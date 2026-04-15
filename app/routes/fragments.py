@@ -41,16 +41,17 @@ async def create_task(
 ):
     classification, llm_result = await classify_task(title, description or None, db)
 
+    resolved_category = _resolve_category(classification.category)
     task = Task(
         title=title,
         description=description or None,
-        category=classification.category,
+        category=resolved_category,
         context_id=classification.context_id,
         urgency=classification.urgency,
         due_date=classification.due_date,
         estimated_minutes=classification.estimated_minutes,
         tags=json.dumps(classification.tags) if classification.tags else None,
-        needs_review=1 if classification.confidence < 0.7 else 0,
+        needs_review=1 if (classification.confidence < 0.7 or resolved_category is None) else 0,
         llm_confidence=classification.confidence,
         llm_reasoning=classification.reasoning,
         llm_raw_response=llm_result.raw_json if llm_result else None,
@@ -311,6 +312,13 @@ async def signal_column(request: Request, db: AsyncSession = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_category(category: str | None) -> str | None:
+    """Retourne None si la catégorie est un préfixe NEW: (LLM hallucination) ou déjà None."""
+    if category and category.startswith("NEW:"):
+        return None
+    return category
 
 
 async def _get_task_or_404(db: AsyncSession, task_id: int) -> Task:

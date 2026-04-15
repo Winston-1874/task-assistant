@@ -79,7 +79,8 @@ Tu reçois une tâche à classer et tu dois retourner un objet JSON structuré.
 Règles :
 - Choisis la catégorie la plus précise parmi celles fournies.
 - Si aucune ne convient, propose "NEW:<nom_suggéré>".
-- urgency doit refléter l'urgence fiscale/légale réelle, pas la difficulté.
+- urgency DOIT être exactement l'un de : "critique" | "haute" | "normale" | "basse" — jamais "high", "low", "urgent" ni autre valeur.
+- confidence DOIT être un nombre décimal entre 0.0 et 1.0 (ex. 0.85) — jamais "high", "low" ni "medium".
 - due_date : extrais les dates explicites ou implicites ("fin du mois", "avant la déclaration TVA").
   Format ISO 8601 (YYYY-MM-DD) ou null.
 - needs_due_date : true si la tâche semble avoir une échéance mais qu'elle n'est pas exprimée.

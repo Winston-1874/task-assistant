@@ -6,6 +6,7 @@ Orchestre : chargement DB → few-shots → prompt → LLM → fallback inbox.
 
 import logging
 
+from openai.types.chat import ChatCompletionMessageParam
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,15 +23,6 @@ from app.schemas import Classification
 
 logger = logging.getLogger(__name__)
 
-_INBOX_FALLBACK = Classification(
-    category="inbox",
-    urgency="normale",
-    confidence=0.0,
-    reasoning="Fallback automatique — erreur LLM.",
-    needs_due_date=False,
-    tags=[],
-)
-
 
 async def classify_task(
     title: str,
@@ -42,8 +34,8 @@ async def classify_task(
     Classifie une tâche via LLM.
 
     Retourne (classification, llm_result).
-    llm_result est None si on est tombé en fallback sans appel réussi
-    (persistez llm_result.raw_json dans Task.llm_raw_response quand non-None).
+    - llm_result non-None → succès : persister llm_result.raw_json dans Task.llm_raw_response.
+    - llm_result est None → fallback inbox (erreur LLM) : poser needs_review=1 sur la tâche.
     """
     if llm is None:
         llm = get_llm_client()
@@ -52,7 +44,7 @@ async def classify_task(
     contexts = await _load_contexts(db)
     few_shots = await select_few_shots(title, description, db)
 
-    messages = [
+    messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": TASK_CLASSIFIER_SYSTEM},
         {
             "role": "user",
@@ -61,8 +53,12 @@ async def classify_task(
     ]
 
     try:
-        result = await llm.structured_complete(messages=messages, schema=Classification)  # type: ignore[arg-type]
-        logger.info("Classification OK — category=%s confidence=%.2f", result.data.category, result.data.confidence)
+        result = await llm.structured_complete(messages=messages, schema=Classification)
+        logger.info(
+            "Classification OK — category=%s confidence=%.2f",
+            result.data.category,
+            result.data.confidence,
+        )
         return result.data, result
 
     except (LLMParseError, LLMTransportError) as e:
@@ -88,30 +84,32 @@ async def _load_categories(db: AsyncSession) -> list[CategoryDict]:
     categories = list(cats_result.scalars().all())
 
     notes_result = await db.execute(select(CategoryNote))
-    notes_by_cat: dict[str | None, list[str]] = {}
+    notes_by_cat: dict[str, list[str]] = {}
     for note in notes_result.scalars().all():
+        if note.category is None:
+            logger.warning("CategoryNote id=%s sans catégorie — ignorée", note.id)
+            continue
         notes_by_cat.setdefault(note.category, []).append(note.note)
 
-    return [
-        CategoryDict(
-            name=cat.name,
-            description=cat.description,
-            **({"notes": " | ".join(notes_by_cat[cat.name])} if cat.name in notes_by_cat else {}),
-        )
-        for cat in categories
-    ]
+    result: list[CategoryDict] = []
+    for cat in categories:
+        d: CategoryDict = {"name": cat.name, "description": cat.description}
+        if cat.name in notes_by_cat:
+            d["notes"] = " | ".join(notes_by_cat[cat.name])
+        result.append(d)
+    return result
 
 
 async def _load_contexts(db: AsyncSession) -> list[ContextDict]:
-    result = await db.execute(
+    stmt = await db.execute(
         select(Context).where(Context.archived == 0)
     )
-    return [
-        ContextDict(
-            id=ctx.id,
-            name=ctx.name,
-            **({"kind": ctx.kind} if ctx.kind else {}),
-            **({"aliases": ctx.aliases} if ctx.aliases else {}),
-        )
-        for ctx in result.scalars().all()
-    ]
+    contexts: list[ContextDict] = []
+    for ctx in stmt.scalars().all():
+        d: ContextDict = {"id": ctx.id, "name": ctx.name}
+        if ctx.kind:
+            d["kind"] = ctx.kind
+        if ctx.aliases:
+            d["aliases"] = ctx.aliases
+        contexts.append(d)
+    return contexts

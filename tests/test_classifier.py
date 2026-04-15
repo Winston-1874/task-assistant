@@ -1,7 +1,7 @@
 """Tests de app/llm/classifier.py — mock LLM + DB en mémoire."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.db import Base
 from app.llm.classifier import classify_task
 from app.llm.client import LLMParseError, LLMResult, LLMTransportError
-from app.models import Category, Context
+from app.models import Category, CategoryNote, Context
 from app.schemas import Classification
 
 
@@ -24,9 +24,12 @@ async def db() -> AsyncSession:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
+    session = session_factory()
+    try:
         yield session
-    await engine.dispose()
+    finally:
+        await session.close()
+        await engine.dispose()
 
 
 @pytest.fixture
@@ -38,7 +41,10 @@ async def db_with_data(db: AsyncSession) -> AsyncSession:
     return db
 
 
-def make_llm_result(category: str = "client_urgent", confidence: float = 0.9) -> LLMResult:
+def make_llm_result(
+    category: str = "client_urgent",
+    confidence: float = 0.9,
+) -> LLMResult[Classification]:
     data = Classification(
         category=category,
         urgency="haute",
@@ -57,7 +63,10 @@ def make_llm_result(category: str = "client_urgent", confidence: float = 0.9) ->
     )
 
 
-def make_mock_llm(result: LLMResult | None = None, raises: Exception | None = None) -> MagicMock:
+def make_mock_llm(
+    result: LLMResult[Classification] | None = None,
+    raises: Exception | None = None,
+) -> MagicMock:
     llm = MagicMock()
     if raises:
         llm.structured_complete = AsyncMock(side_effect=raises)
@@ -79,6 +88,7 @@ async def test_classify_returns_classification_and_result(db_with_data: AsyncSes
     assert classification.category == "client_urgent"
     assert llm_result is not None
     assert llm_result.raw_json
+    assert llm_result.prompt_version == "1.0.0"
 
 
 @pytest.mark.asyncio
@@ -86,8 +96,7 @@ async def test_classify_passes_categories_to_prompt(db_with_data: AsyncSession) 
     llm = make_mock_llm()
     await classify_task("Facturation interne", None, db_with_data, llm=llm)
 
-    call_args = llm.structured_complete.call_args
-    messages = call_args.kwargs["messages"]
+    messages = llm.structured_complete.call_args.kwargs["messages"]
     user_content = messages[1]["content"]
 
     assert "client_urgent" in user_content
@@ -106,11 +115,30 @@ async def test_classify_passes_contexts_to_prompt(db_with_data: AsyncSession) ->
 
 
 @pytest.mark.asyncio
-async def test_classify_empty_db_works(db: AsyncSession) -> None:
-    """Sans catégories ni contextes — guard categories vides actif."""
+async def test_classify_empty_db_uses_no_category_guard(db: AsyncSession) -> None:
+    """Sans catégories — le guard 'AUCUNE CATÉGORIE DÉFINIE' doit apparaître dans le prompt."""
     llm = make_mock_llm()
-    classification, llm_result = await classify_task("Tâche quelconque", None, db, llm=llm)
-    assert classification.category == "client_urgent"  # résultat du mock
+    await classify_task("Tâche quelconque", None, db, llm=llm)
+
+    messages = llm.structured_complete.call_args.kwargs["messages"]
+    user_content = messages[1]["content"]
+
+    assert "AUCUNE CATÉGORIE" in user_content
+
+
+@pytest.mark.asyncio
+async def test_classify_with_category_notes(db: AsyncSession) -> None:
+    db.add(Category(name="client_urgent", description="Urgences client"))
+    db.add(CategoryNote(category="client_urgent", note="TVA = toujours haute"))
+    await db.commit()
+
+    llm = make_mock_llm()
+    await classify_task("TVA AGRIWAN", None, db, llm=llm)
+
+    messages = llm.structured_complete.call_args.kwargs["messages"]
+    user_content = messages[1]["content"]
+
+    assert "TVA = toujours haute" in user_content
 
 
 # ---------------------------------------------------------------------------
@@ -135,11 +163,12 @@ async def test_fallback_on_llm_transport_error(db_with_data: AsyncSession) -> No
     classification, llm_result = await classify_task("Tâche", None, db_with_data, llm=llm)
 
     assert classification.category == "inbox"
+    assert "LLMTransportError" in classification.reasoning
     assert llm_result is None
 
 
 # ---------------------------------------------------------------------------
-# Test needs_review via confidence faible
+# Test confidence faible
 # ---------------------------------------------------------------------------
 
 

@@ -182,3 +182,40 @@ async def test_task_card_corriger_ia_button_visible_when_reasoning(
     )
     assert response.status_code == 200
     assert "Corriger IA" in response.text
+
+
+# ---------------------------------------------------------------------------
+# 6. POST correct field=reasoning persiste llm_reasoning
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_correct_reasoning_updates_task(
+    client: AsyncClient,
+    auth_cookies: dict,
+    db_session: AsyncSession,
+) -> None:
+    """POST /fragments/tasks/{id}/correct avec field=reasoning met à jour llm_reasoning."""
+    task = Task(
+        title="Tâche avec raisonnement à corriger",
+        urgency="normale",
+        status="open",
+        llm_pending=False,
+        llm_reasoning="Raisonnement initial.",
+        touched_at=datetime.now(tz=timezone.utc),
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    response = await client.post(
+        f"/fragments/tasks/{task.id}/correct",
+        data={"field": "reasoning", "new_value": "Raisonnement corrigé."},
+        cookies=auth_cookies,
+    )
+    assert response.status_code == 200
+    assert "Raisonnement corrigé." in response.text
+
+    await db_session.refresh(task)
+    assert task.llm_reasoning == "Raisonnement corrigé."
+    assert task.was_corrected == 1

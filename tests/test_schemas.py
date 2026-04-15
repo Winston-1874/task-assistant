@@ -23,6 +23,14 @@ def test_urgency_alias_medium():
     c = Classification(category="x", urgency="medium", confidence=0.8, reasoning="r", needs_due_date=False, tags=[])
     assert c.urgency == "normale"
 
+def test_urgency_alias_critical():
+    c = Classification(category="x", urgency="critical", confidence=0.8, reasoning="r", needs_due_date=False, tags=[])
+    assert c.urgency == "critique"
+
+def test_urgency_alias_normal():
+    c = Classification(category="x", urgency="normal", confidence=0.8, reasoning="r", needs_due_date=False, tags=[])
+    assert c.urgency == "normale"
+
 def test_urgency_fr_passthrough():
     c = Classification(category="x", urgency="critique", confidence=0.8, reasoning="r", needs_due_date=False, tags=[])
     assert c.urgency == "critique"

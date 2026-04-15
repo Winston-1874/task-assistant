@@ -23,6 +23,9 @@ data/
 .coverage
 htmlcov/
 
+# Session
+PROGRESS.md
+
 # Editeurs
 .vscode/
 .idea/

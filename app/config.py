@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     llm_model: str = "google/gemini-2.5-flash"
     llm_vision_model: str = "google/gemini-2.5-flash"
 
+    # Tuning LLM — surchargeables via .env
+    llm_timeout: float = 15.0
+    llm_retry_delay: float = 2.0
+    llm_rate_limit_delay: float = 10.0
+    llm_max_tokens: int = 1024
+
     database_url: str = "sqlite+aiosqlite:///./data/tasks.db"
     secret_key: str = "changeme"
     app_password_hash: str = ""

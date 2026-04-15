@@ -89,6 +89,7 @@ async def record_correction(
 async def _get_recent_corrections(db: AsyncSession, limit: int) -> list[Correction]:
     result = await db.execute(
         select(Correction)
+        .where(Correction.field != "reasoning")
         .order_by(Correction.corrected_at.desc())
         .limit(limit)
     )
@@ -108,6 +109,7 @@ async def _get_similar_corrections(
     result = await db.execute(
         select(Correction)
         .where(Correction.task_title.is_not(None))
+        .where(Correction.field != "reasoning")
         .order_by(Correction.corrected_at.desc())
         .limit(_MAX_CANDIDATE_ROWS)
     )

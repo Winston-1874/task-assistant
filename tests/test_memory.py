@@ -202,3 +202,21 @@ def test_rank_by_tfidf_empty_query() -> None:
     corrections = [make_correction(i, f"Tâche {i}") for i in range(3)]
     result = _rank_by_tfidf("", corrections, limit=3)
     assert len(result) <= 3
+
+
+# ---------------------------------------------------------------------------
+# Test: reasoning corrections excluded from few-shots
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_select_few_shots_excludes_reasoning_corrections(db: AsyncSession) -> None:
+    """Corrections with field='reasoning' must not appear in few-shots."""
+    await _add_correction(db, 1, "TVA AGRIWAN", "urgency", "normale", "haute")
+    await _add_correction(db, 1, "TVA AGRIWAN", "reasoning", "old reasoning text", "new reasoning text")
+
+    result = await select_few_shots("TVA AGRIWAN", None, db)
+
+    fields = [r["field"] for r in result]
+    assert "urgency" in fields
+    assert "reasoning" not in fields

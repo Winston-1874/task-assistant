@@ -95,7 +95,7 @@ class Correction(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("tasks.id"))
-    field: Mapped[str] = mapped_column(Text, nullable=False)  # category|urgency|due_date|context_id
+    field: Mapped[str] = mapped_column(Text, nullable=False)  # category|urgency|due_date|context_id|reasoning
     old_value: Mapped[str | None] = mapped_column(Text)
     new_value: Mapped[str | None] = mapped_column(Text)
     task_title: Mapped[str | None] = mapped_column(Text)

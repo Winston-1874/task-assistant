@@ -1,7 +1,7 @@
 """
 Étage 2 — Classification de tâche.
 
-Orchestre : chargement DB → few-shots → prompt → LLM → fallback inbox.
+Orchestre : chargement DB → few-shots → prompt → LLM → fallback (category=None).
 """
 
 import logging
@@ -35,7 +35,7 @@ async def classify_task(
 
     Retourne (classification, llm_result).
     - llm_result non-None → succès : persister llm_result.raw_json dans Task.llm_raw_response.
-    - llm_result est None → fallback inbox (erreur LLM) : poser needs_review=1 sur la tâche.
+    - llm_result est None → fallback category=None (erreur LLM) : poser needs_review=1 sur la tâche.
     """
     if llm is None:
         llm = get_llm_client()

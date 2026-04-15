@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
-from app.llm.classifier import classify_task
-from app.llm.proactive import ask_due_date, generate_signal
+from app.llm.proactive import generate_signal  # ask_due_date used via _classify_and_update
 from app.memory import record_correction
 from app.models import PendingPrompt, Task
+from app.routes.conversation import _classify_and_update, _resolve_category
 from app.templates_config import templates
 
 logger = logging.getLogger(__name__)
@@ -35,41 +35,27 @@ router = APIRouter(prefix="/fragments", dependencies=[Depends(require_auth)])
 @router.post("/tasks", response_class=HTMLResponse)
 async def create_task(
     request: Request,
+    background_tasks: BackgroundTasks,
     title: str = Form(...),
     description: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
-    classification, llm_result = await classify_task(title, description or None, db)
-
-    resolved_category = _resolve_category(classification.category)
     task = Task(
         title=title,
         description=description or None,
-        category=resolved_category,
-        context_id=classification.context_id,
-        urgency=classification.urgency,
-        due_date=classification.due_date,
-        estimated_minutes=classification.estimated_minutes,
-        tags=json.dumps(classification.tags) if classification.tags else None,
-        needs_review=1 if (classification.confidence < 0.7 or resolved_category is None) else 0,
-        llm_confidence=classification.confidence,
-        llm_reasoning=classification.reasoning,
-        llm_raw_response=llm_result.raw_json if llm_result else None,
+        llm_pending=True,
+        status="open",
     )
     db.add(task)
-    await db.flush()
-
-    pending: PendingPrompt | None = None
-    if classification.needs_due_date and task.due_date is None:
-        pending = await ask_due_date(task, db)
-
     await db.commit()
+    await db.refresh(task)
 
-    today = date.today()
+    background_tasks.add_task(_classify_and_update, task.id, title, description or None)
+
     return templates.TemplateResponse(
         request,
         "fragments/task_card.html",
-        {"task": task, "pending": pending, "today": today},
+        {"task": task, "pending": None, "today": date.today()},
     )
 
 
@@ -119,6 +105,42 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
         await db.delete(task)
         await db.commit()
     return Response(status_code=200)
+
+
+# ---------------------------------------------------------------------------
+# Poll statut classification (optimistic UI)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tasks/{task_id}/status", response_class=HTMLResponse)
+async def task_status(
+    request: Request,
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retourne la carte en mode 'classifying' si llm_pending=True,
+    ou la carte complète si la classification est terminée.
+    HTMX polling s'arrête automatiquement quand la carte sans hx-trigger est retournée.
+    """
+    task = await _get_task_or_404(db, task_id)
+    today = date.today()
+
+    pending_prompt = None
+    if not task.llm_pending:
+        pp_result = await db.execute(
+            select(PendingPrompt).where(
+                PendingPrompt.task_id == task_id,
+                PendingPrompt.resolved_at.is_(None),
+            )
+        )
+        pending_prompt = pp_result.scalar_one_or_none()
+
+    return templates.TemplateResponse(
+        request,
+        "fragments/task_card.html",
+        {"task": task, "pending": pending_prompt, "today": today},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -312,13 +334,6 @@ async def signal_column(request: Request, db: AsyncSession = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _resolve_category(category: str | None) -> str | None:
-    """Retourne None si la catégorie est un préfixe NEW: (LLM hallucination) ou déjà None."""
-    if category and category.startswith("NEW:"):
-        return None
-    return category
 
 
 async def _get_task_or_404(db: AsyncSession, task_id: int) -> Task:

@@ -24,6 +24,12 @@
   x-transition:leave-start="opacity-100"
   x-transition:leave-end="opacity-0"
   class="group bg-white rounded-lg border border-gray-200 border-l-4 {{ urgency_border }} shadow-sm hover:shadow transition-shadow"
+  {% if task.llm_pending %}
+  hx-get="/fragments/tasks/{{ task.id }}/status"
+  hx-trigger="every 2s"
+  hx-target="#task-{{ task.id }}"
+  hx-swap="outerHTML"
+  {% endif %}
 >
 
   {# Bandeau pending prompt #}

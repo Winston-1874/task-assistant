@@ -171,9 +171,8 @@ async def test_create_task_returns_card(
     auth_cookies: dict,
     db_session: AsyncSession,
 ) -> None:
-    result = make_classification_result()
-    with patch("app.routes.fragments.classify_task", new_callable=AsyncMock) as mock_classify:
-        mock_classify.return_value = (result.data, result)
+    """La création de tâche retourne une carte immédiatement (optimistic UI)."""
+    with patch("app.routes.fragments._classify_and_update", new_callable=AsyncMock):
         response = await client.post(
             "/fragments/tasks",
             data={"title": "TVA AGRIWAN", "description": ""},
@@ -186,22 +185,21 @@ async def test_create_task_returns_card(
 
 
 @pytest.mark.asyncio
-async def test_create_task_low_confidence_sets_needs_review(
+async def test_create_task_optimistic_has_llm_pending(
     client: AsyncClient,
     auth_cookies: dict,
     db_session: AsyncSession,
 ) -> None:
-    result = make_classification_result(confidence=0.5)
-    with patch("app.routes.fragments.classify_task", new_callable=AsyncMock) as mock_classify:
-        mock_classify.return_value = (result.data, result)
+    """La carte retournée immédiatement contient le polling HTMX (llm_pending=True)."""
+    with patch("app.routes.fragments._classify_and_update", new_callable=AsyncMock):
         response = await client.post(
             "/fragments/tasks",
-            data={"title": "Tâche ambiguë", "description": ""},
+            data={"title": "Tâche optimiste", "description": ""},
             cookies=auth_cookies,
         )
 
     assert response.status_code == 200
-    assert "à revoir" in response.text
+    assert "hx-trigger" in response.text  # carte en mode polling
 
 
 # ---------------------------------------------------------------------------
@@ -518,3 +516,61 @@ async def test_conversation_non_task_intent(
 
     assert response.status_code == 200
     assert "venir" in response.text  # message "fonctionnalité à venir"
+
+
+@pytest.mark.asyncio
+async def test_conversation_parse_returns_card_immediately(client, auth_cookies, db_session, monkeypatch):
+    """La route retourne une carte (llm_pending) sans attendre le LLM."""
+    from app.schemas import Intent
+
+    async def slow_classify(*args, **kwargs):
+        import asyncio
+        await asyncio.sleep(100)  # ne sera jamais atteint car BackgroundTask
+
+    monkeypatch.setattr("app.routes.conversation.classify_task", slow_classify)
+    monkeypatch.setattr(
+        "app.routes.conversation.route_intent",
+        AsyncMock(return_value=Intent(kind="new_task", confidence=0.9, payload={})),
+    )
+
+    response = await client.post(
+        "/conversation/parse",
+        data={"message": "TVA AGRIWAN à envoyer"},
+        cookies=auth_cookies,
+    )
+    assert response.status_code == 200
+    assert "TVA AGRIWAN" in response.text
+
+
+@pytest.mark.asyncio
+async def test_poll_endpoint_returns_spinner_while_pending(client, auth_cookies, db_session):
+    """GET /fragments/tasks/{id}/status retourne spinner si llm_pending=True."""
+    from app.models import Task
+    task = Task(title="Test", llm_pending=True, status="open")
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    response = await client.get(
+        f"/fragments/tasks/{task.id}/status",
+        cookies=auth_cookies,
+    )
+    assert response.status_code == 200
+    assert "hx-trigger" in response.text  # carte encore en mode polling
+
+
+@pytest.mark.asyncio
+async def test_poll_endpoint_returns_full_card_when_ready(client, auth_cookies, db_session):
+    """GET /fragments/tasks/{id}/status retourne carte complète si llm_pending=False."""
+    from app.models import Task
+    task = Task(title="Test", llm_pending=False, urgency="normale", status="open")
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    response = await client.get(
+        f"/fragments/tasks/{task.id}/status",
+        cookies=auth_cookies,
+    )
+    assert response.status_code == 200
+    assert 'hx-trigger="every 2s"' not in response.text

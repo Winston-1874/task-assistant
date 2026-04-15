@@ -10,18 +10,18 @@ import json
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
-from app.db import get_db
+from app.db import get_db, get_db_session
 from app.llm.classifier import classify_task
 from app.llm.client import LLMTransportError
 from app.llm.proactive import ask_due_date
 from app.llm.router import route_intent
 from app.models import Task
-
 from app.templates_config import templates
 
 logger = logging.getLogger(__name__)
@@ -31,16 +31,10 @@ router = APIRouter(dependencies=[Depends(require_auth)])
 @router.post("/conversation/parse", response_class=HTMLResponse)
 async def parse_message(
     request: Request,
+    background_tasks: BackgroundTasks,
     message: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Orchestre : routeur → action → fragment HTML de réponse.
-
-    - new_task  : classifie + crée la tâche, retourne task_card
-    - command / query / update_context : message informatif V1
-    - Erreur réseau LLM → fragment d'erreur
-    """
     try:
         intent = await route_intent(message)
     except LLMTransportError as e:
@@ -48,7 +42,7 @@ async def parse_message(
         return _error_html("Service LLM indisponible. Réessaie dans quelques instants.")
 
     if intent.kind == "new_task":
-        return await _handle_new_task(request, message, db)
+        return await _handle_new_task(request, background_tasks, message, db)
 
     labels = {
         "command": "Commande détectée — fonctionnalité à venir.",
@@ -61,43 +55,63 @@ async def parse_message(
 
 async def _handle_new_task(
     request: Request,
+    background_tasks: BackgroundTasks,
     message: str,
     db: AsyncSession,
 ) -> HTMLResponse:
-    try:
-        classification, llm_result = await classify_task(message, None, db)
-    except LLMTransportError as e:
-        logger.error("Réseau LLM mort lors de la classification: %s", e)
-        return _error_html("Service LLM indisponible — message non sauvegardé. Réessaie dans quelques instants.")
-
-    resolved_category = _resolve_category(classification.category)
     task = Task(
         title=message[:200],
-        category=resolved_category,
-        context_id=classification.context_id,
-        urgency=classification.urgency,
-        due_date=classification.due_date,
-        estimated_minutes=classification.estimated_minutes,
-        tags=json.dumps(classification.tags) if classification.tags else None,
-        needs_review=1 if (classification.confidence < 0.7 or resolved_category is None) else 0,
-        llm_confidence=classification.confidence,
-        llm_reasoning=classification.reasoning,
-        llm_raw_response=llm_result.raw_json if llm_result else None,
+        llm_pending=True,
+        status="open",
     )
     db.add(task)
-    await db.flush()
-
-    pending = None
-    if classification.needs_due_date and task.due_date is None:
-        pending = await ask_due_date(task, db)
-
     await db.commit()
+    await db.refresh(task)
+
+    background_tasks.add_task(_classify_and_update, task.id, message, None)
 
     return templates.TemplateResponse(
         request,
         "fragments/task_card.html",
-        {"task": task, "pending": pending, "today": date.today()},
+        {"task": task, "pending": None, "today": date.today()},
     )
+
+
+async def _classify_and_update(task_id: int, title: str, description: str | None) -> None:
+    """Classifie la tâche en arrière-plan et met à jour la DB."""
+    async with get_db_session() as db:
+        result = await db.execute(select(Task).where(Task.id == task_id))
+        task = result.scalar_one_or_none()
+        if task is None:
+            logger.warning("_classify_and_update: tâche %d introuvable", task_id)
+            return
+
+        try:
+            classification, llm_result = await classify_task(title, description, db)
+        except Exception as e:
+            logger.error("_classify_and_update: erreur classification tâche %d: %s", task_id, e)
+            task.llm_pending = False
+            task.needs_review = 1
+            await db.commit()
+            return
+
+        resolved_category = _resolve_category(classification.category)
+        task.category = resolved_category
+        task.context_id = classification.context_id
+        task.urgency = classification.urgency
+        task.due_date = classification.due_date
+        task.estimated_minutes = classification.estimated_minutes
+        task.tags = json.dumps(classification.tags) if classification.tags else None
+        task.needs_review = 1 if (classification.confidence < 0.7 or resolved_category is None) else 0
+        task.llm_confidence = classification.confidence
+        task.llm_reasoning = classification.reasoning
+        task.llm_raw_response = llm_result.raw_json if llm_result else None
+        task.llm_pending = False
+
+        if classification.needs_due_date and task.due_date is None:
+            await ask_due_date(task, db)
+
+        await db.commit()
 
 
 def _resolve_category(category: str | None) -> str | None:

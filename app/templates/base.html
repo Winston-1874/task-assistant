@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="fr" x-data>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Tasks{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.0/dist/htmx.min.js"></script>
+  <script>
+    // Alpine store : file d'undo (doit être défini avant le chargement d'Alpine)
+    document.addEventListener("alpine:init", () => {
+      Alpine.store("undo", {
+        actions: [],
+        _nextId: 1,
+
+        /**
+         * Pousse une action undoable.
+         *
+         * @param {string} message   — texte affiché dans le toast
+         * @param {function} onCommit — appelée après 5s si pas annulée
+         * @param {function} onUndo   — appelée si l'utilisateur annule
+         */
+        push(message, onCommit, onUndo) {
+          const id = this._nextId++;
+          const timer = setTimeout(() => {
+            this._commit(id);
+          }, 5000);
+          // interval stocké sur l'action pour pouvoir clearInterval dans cancel/commit
+          const interval = setInterval(() => {
+            const action = this.actions.find((a) => a.id === id);
+            if (!action) { clearInterval(interval); return; }
+            action.progress = Math.max(0, action.progress - 1);
+          }, 50);
+          this.actions.push({ id, message, timer, interval, onCommit, onUndo, progress: 100 });
+
+          return id;
+        },
+
+        cancel(id) {
+          const action = this.actions.find((a) => a.id === id);
+          if (!action) return;
+          clearTimeout(action.timer);
+          clearInterval(action.interval);
+          if (action.onUndo) action.onUndo();
+          this.actions = this.actions.filter((a) => a.id !== id);
+        },
+
+        _commit(id) {
+          const action = this.actions.find((a) => a.id === id);
+          if (!action) return;
+          clearInterval(action.interval);
+          if (action.onCommit) action.onCommit();
+          this.actions = this.actions.filter((a) => a.id !== id);
+        },
+      });
+    });
+  </script>
+  <script src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js" defer></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .htmx-indicator { opacity: 0; transition: opacity 200ms ease-in; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen flex flex-col">
+
+  {# Nav #}
+  <nav class="bg-white border-b border-gray-100 px-4 py-0 flex items-stretch gap-1 text-sm h-11">
+    <a href="/" class="flex items-center px-2 font-semibold text-gray-800 hover:text-blue-600 mr-3">Tasks</a>
+    {% set nav_links = [
+      ("/",       "Today"),
+      ("/week",   "Week"),
+      ("/waiting","Waiting"),
+      ("/inbox",  "Inbox"),
+    ] %}
+    {% for href, label in nav_links %}
+    <a href="{{ href }}"
+       class="flex items-center px-3 text-xs font-medium border-b-2 transition-colors
+         {% if request.url.path == href %}
+           border-blue-500 text-blue-600
+         {% else %}
+           border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300
+         {% endif %}"
+    >{{ label }}</a>
+    {% endfor %}
+    <div class="ml-auto flex items-center gap-3 text-xs">
+      <span class="htmx-indicator text-gray-300 text-xs animate-pulse">●</span>
+      <span class="text-gray-200">|</span>
+      <form method="post" action="/logout" class="inline">
+        <button type="submit" class="text-gray-400 hover:text-gray-700 transition-colors">Déconnexion</button>
+      </form>
+    </div>
+  </nav>
+
+  {# Main #}
+  <main class="flex flex-1 overflow-hidden">
+    {% block content %}{% endblock %}
+  </main>
+
+  {# Input conversationnel fixe en bas #}
+  {% block conversation %}
+  <div class="border-t border-gray-100 bg-white px-4 py-2.5 shadow-[0_-1px_3px_rgba(0,0,0,0.04)]">
+    <form
+      hx-post="/conversation/parse"
+      hx-target="#inbox-list"
+      hx-swap="afterbegin"
+      hx-indicator=".htmx-indicator"
+      class="flex gap-2 items-end"
+      x-data
+      x-init="$el.addEventListener('htmx:afterRequest', () => $el.querySelector('textarea').value = '')"
+    >
+      <textarea
+        name="message"
+        placeholder="Dis-moi ce que tu as en tête… (Entrée pour envoyer, Maj+Entrée pour sauter une ligne)"
+        rows="1"
+        style="field-sizing: content; min-height: 2.25rem; max-height: 8rem;"
+        class="flex-1 resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm
+               focus:outline-none focus:ring-2 focus:ring-blue-400 focus:bg-white focus:border-transparent
+               placeholder:text-gray-300 transition-colors"
+        x-on:keydown.enter.prevent="if (!$event.shiftKey) { $el.closest('form').requestSubmit(); }"
+      ></textarea>
+      <button
+        type="submit"
+        class="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700
+               active:bg-blue-800 transition-colors self-end mb-px"
+        title="Envoyer (Entrée)"
+      >→</button>
+    </form>
+  </div>
+  {% endblock %}
+
+  {# Toasts undo — conteneur fixe bas-droit #}
+  <div
+    class="fixed bottom-20 right-4 z-50 flex flex-col gap-2"
+    x-data
+    x-show="$store.undo.actions.length > 0"
+    x-cloak
+  >
+    <template x-for="action in $store.undo.actions" :key="action.id">
+      <div class="relative overflow-hidden bg-gray-800 text-white text-sm rounded-lg shadow-lg px-4 py-3 flex items-center gap-3 min-w-64">
+        <span class="flex-1" x-text="action.message"></span>
+        <button
+          class="text-blue-300 hover:text-blue-100 font-medium shrink-0"
+          x-on:click="$store.undo.cancel(action.id)"
+        >Annuler</button>
+        {# Barre de progression #}
+        <div class="absolute bottom-0 left-0 h-0.5 bg-blue-400 rounded-b-lg transition-all"
+             :style="'width:' + action.progress + '%'"></div>
+      </div>
+    </template>
+  </div>
+
+  {# Overlay d'aide clavier #}
+  <div
+    id="kb-help-overlay"
+    class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
+    onclick="this.classList.add('hidden')"
+  >
+    <div class="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full text-sm" onclick="event.stopPropagation()">
+      <h2 class="font-semibold text-gray-800 mb-4">Raccourcis clavier</h2>
+      <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600">
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">n / /</dt><dd>Focus saisie</dd>
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">j / k</dt><dd>Naviguer les tâches</dd>
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">x</dt><dd>Marquer done</dd>
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">g t</dt><dd>Aller à Today</dd>
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">g w</dt><dd>Aller à Week</dd>
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">g i</dt><dd>Aller à Inbox</dd>
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">?</dt><dd>Cette aide</dd>
+        <dt class="font-mono bg-gray-100 rounded px-1 justify-self-start">Esc</dt><dd>Fermer</dd>
+      </dl>
+      <button
+        class="mt-4 text-xs text-gray-400 hover:text-gray-600 w-full text-center"
+        onclick="document.getElementById('kb-help-overlay').classList.add('hidden')"
+      >Fermer</button>
+    </div>
+  </div>
+
+  <script src="/static/js/keyboard.js"></script>
+
+</body>
+</html>

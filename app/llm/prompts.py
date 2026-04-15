@@ -168,6 +168,13 @@ def proactive_zombie_user(task_title: str, days_idle: int, postponed_count: int)
     )
 
 
+class DigestTaskDict(TypedDict):
+    title: str
+    urgency: str
+    due_date: NotRequired[str | None]
+    estimated_minutes: NotRequired[int | None]
+
+
 def proactive_signal_user(tasks: list[TaskSignalDict], capacity_minutes: int) -> str:
     task_list = "\n".join(
         f"- [{t['urgency']}] {t['title']} (due: {t.get('due_date') or 'pas de date'})"
@@ -179,4 +186,38 @@ def proactive_signal_user(tasks: list[TaskSignalDict], capacity_minutes: int) ->
         f"Identifie les 3 à 5 tâches prioritaires aujourd'hui avec une justification courte "
         f"(1 phrase par tâche).\n"
         f'Réponds avec un JSON : {{"priorities": [{{"task_title": "...", "reason": "..."}}]}}'
+    )
+
+
+def digest_user(
+    today_tasks: list[DigestTaskDict],
+    week_tasks: list[DigestTaskDict],
+    capacity_minutes: int,
+    today_iso: str,
+) -> str:
+    def fmt(tasks: list[DigestTaskDict]) -> str:
+        if not tasks:
+            return "  (aucune)"
+        return "\n".join(
+            f"  - [{t['urgency']}] {t['title']}"
+            + (f" — due {t['due_date']}" if t.get("due_date") else "")
+            + (f" (~{t['estimated_minutes']}min)" if t.get("estimated_minutes") else "")
+            for t in tasks
+        )
+
+    total_min = sum(t.get("estimated_minutes") or 0 for t in today_tasks)
+    overload = total_min > capacity_minutes
+
+    return (
+        f"Date : {today_iso}\n"
+        f"Capacité journalière : {capacity_minutes} minutes.\n"
+        f"Charge estimée aujourd'hui : {total_min} minutes"
+        + (" ⚠️ SURCHARGE" if overload else "") + ".\n\n"
+        f"=== TÂCHES DU JOUR ===\n{fmt(today_tasks)}\n\n"
+        f"=== TÂCHES DE LA SEMAINE ===\n{fmt(week_tasks)}\n\n"
+        f"Génère un digest matinal court en français :\n"
+        f"- summary : 2-3 phrases résumant la journée (ton professionnel, direct)\n"
+        f"- top_tasks : liste de 3-5 titres de tâches prioritaires\n"
+        f"- alert : message d'alerte si surcharge ou tâche critique (null sinon)\n"
+        f'Réponds avec un JSON : {{"summary": "...", "top_tasks": [...], "alert": null}}'
     )

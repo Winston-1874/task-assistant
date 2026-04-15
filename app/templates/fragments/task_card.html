@@ -1,0 +1,174 @@
+{# Fragment réutilisable — inclus dans index.html et retourné par les endpoints HTMX #}
+{# Variables attendues : task, pending (PendingPrompt|None), today (date) #}
+
+{% set urgency_border = {
+  "critique": "border-l-red-500",
+  "haute":    "border-l-orange-400",
+  "normale":  "border-l-blue-400",
+  "basse":    "border-l-gray-300",
+}.get(task.urgency, "border-l-gray-200") %}
+
+{% set urgency_label = {
+  "critique": ("Critique", "text-red-600 bg-red-50"),
+  "haute":    ("Haute",    "text-orange-600 bg-orange-50"),
+  "normale":  ("Normale",  "text-blue-600 bg-blue-50"),
+  "basse":    ("Basse",    "text-gray-500 bg-gray-100"),
+}.get(task.urgency, ("—", "text-gray-400 bg-gray-50")) %}
+
+<div
+  id="task-{{ task.id }}"
+  data-title="{{ task.title | truncate(40, true, '…') | e }}"
+  x-data="{ visible: true, submitting: false }"
+  x-show="visible"
+  x-transition:leave="transition duration-150"
+  x-transition:leave-start="opacity-100"
+  x-transition:leave-end="opacity-0"
+  class="group bg-white rounded-lg border border-gray-200 border-l-4 {{ urgency_border }} shadow-sm hover:shadow transition-shadow"
+>
+
+  {# Bandeau pending prompt #}
+  {% if pending and pending.task_id == task.id %}
+  <div class="px-4 pt-3 pb-2 border-b border-amber-100 bg-amber-50 rounded-t-lg">
+    <p class="text-xs font-medium text-amber-800 mb-2">{{ pending.message }}</p>
+    <form
+      hx-post="/fragments/tasks/{{ task.id }}/prompt/{{ pending.id }}/answer"
+      hx-target="#task-{{ task.id }}"
+      hx-swap="outerHTML"
+      class="flex flex-wrap gap-1"
+    >
+      {% set quick_dates = [
+        ("Aujourd'hui", today.isoformat()),
+        ("Demain",      (today | dateadd(1)).isoformat()),
+        ("Cette semaine",(today | dateadd(7)).isoformat()),
+        ("+14j",        (today | dateadd(14)).isoformat()),
+        ("Pas de deadline", "no_deadline"),
+      ] %}
+      {% for label, val in quick_dates %}
+      <button
+        type="submit"
+        name="answer"
+        value="{{ val }}"
+        class="rounded-full border border-amber-300 bg-white px-2.5 py-0.5 text-xs text-amber-700 hover:bg-amber-100 transition-colors"
+      >{{ label }}</button>
+      {% endfor %}
+    </form>
+  </div>
+  {% endif %}
+
+  {# Corps de la card #}
+  <div class="flex items-start gap-3 px-4 py-3">
+
+    {# Checkbox done #}
+    {% if task.status == "done" %}
+    <form
+      hx-post="/fragments/tasks/{{ task.id }}/undo/done"
+      hx-target="#task-{{ task.id }}"
+      hx-swap="outerHTML"
+      class="mt-0.5 shrink-0"
+    >
+      <button
+        type="submit"
+        title="Annuler done"
+        class="w-4 h-4 rounded border-2 border-blue-400 bg-blue-400 flex items-center justify-center text-white text-xs"
+      >✓</button>
+    </form>
+    {% else %}
+    <button
+      type="button"
+      title="Marquer comme fait"
+      class="mt-0.5 shrink-0 w-4 h-4 rounded border-2 border-gray-300 hover:border-blue-400 flex items-center justify-center transition-colors disabled:opacity-40"
+      x-bind:disabled="submitting"
+      x-on:click="
+        if (submitting) return;
+        submitting = true;
+        htmx.ajax('POST', '/fragments/tasks/{{ task.id }}/done', {
+          target: '#task-{{ task.id }}',
+          swap: 'outerHTML',
+        });
+        $store.undo.push(
+          '« ' + $el.closest('[id^=task-]').dataset.title + ' » marquée faite',
+          null,
+          () => htmx.ajax('POST', '/fragments/tasks/{{ task.id }}/undo/done', {
+            target: '#task-{{ task.id }}',
+            swap: 'outerHTML',
+          })
+        );
+      "
+    ></button>
+    {% endif %}
+
+    {# Contenu #}
+    <div class="flex-1 min-w-0">
+
+      {# Titre #}
+      <p class="text-sm font-medium text-gray-800 leading-snug
+        {% if task.status == 'done' %}line-through text-gray-400{% endif %}">
+        {{ task.title }}
+      </p>
+
+      {# Meta ligne #}
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
+
+        {% if task.category %}
+        <span class="text-xs text-gray-400 truncate max-w-[12rem]">{{ task.category | truncate(30, true, '…') }}</span>
+        {% endif %}
+
+        {% if task.due_date %}
+        <span class="text-xs {% if task.due_date <= today %}text-red-500 font-medium{% else %}text-gray-400{% endif %}">
+          {{ task.due_date.strftime('%d/%m') }}
+        </span>
+        {% endif %}
+
+        {% if task.estimated_minutes %}
+        <span class="text-xs text-gray-300">~{{ task.estimated_minutes }}min</span>
+        {% endif %}
+
+        {% if task.urgency and task.urgency != 'normale' %}
+        <span class="text-xs px-1.5 py-0 rounded-full {{ urgency_label[1] }}">{{ urgency_label[0] }}</span>
+        {% endif %}
+
+        {% if task.needs_review %}
+        <span class="text-xs text-amber-500 font-medium">⚠ à revoir</span>
+        {% endif %}
+
+      </div>
+
+      {# Raisonnement LLM (optionnel) #}
+      {% if task.llm_reasoning %}
+      <p class="text-xs text-gray-400 mt-1 italic leading-relaxed line-clamp-2">{{ task.llm_reasoning | truncate(120, true, '…') }}</p>
+      {% endif %}
+
+    </div>
+
+    {# Actions (visibles au hover) #}
+    <div class="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+
+      <button
+        type="button"
+        title="Corriger"
+        class="p-1 rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-colors text-xs"
+        x-data
+        x-on:click="$dispatch('open-correction', { taskId: {{ task.id }} })"
+      >✎</button>
+
+      <button
+        type="button"
+        title="Supprimer"
+        class="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors text-xs"
+        x-on:click="
+          visible = false;
+          $store.undo.push(
+            '« ' + $el.closest('[id^=task-]').dataset.title + ' » supprimée',
+            () => htmx.ajax('DELETE', '/fragments/tasks/{{ task.id }}', {
+              target: '#task-{{ task.id }}',
+              swap: 'outerHTML',
+            }),
+            () => { visible = true; }
+          );
+        "
+      >✕</button>
+
+    </div>
+
+  </div>
+</div>

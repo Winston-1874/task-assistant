@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}Tasks — Today{% endblock %}
+
+{% block content %}
+<div class="flex flex-1 overflow-hidden">
+
+  {# Colonne Signal (gauche, masquée sur mobile) #}
+  <aside
+    class="w-52 shrink-0 border-r border-gray-200 bg-white overflow-y-auto hidden lg:flex lg:flex-col"
+    hx-get="/fragments/signal"
+    hx-trigger="load"
+    hx-swap="innerHTML"
+  >
+    <div class="p-4">
+      <p class="text-xs text-gray-300 italic">Chargement…</p>
+    </div>
+  </aside>
+
+  {# Contenu principal #}
+  <div class="flex-1 overflow-y-auto">
+    <div class="max-w-3xl mx-auto px-4 py-6 space-y-8">
+
+      {# pending est un dict[task_id, PendingPrompt] venant de la route index.
+         Les includes de task_card.html attendent un PendingPrompt|None.
+         On résout ici pour chaque tâche avant l'include. #}
+      {% set pending_dict = pending %}
+
+      {# Section NOW #}
+      {% if sections.now %}
+      <section x-data="{ open: true }">
+        <button
+          type="button"
+          class="w-full flex items-center gap-2 mb-3 group"
+          x-on:click="open = !open"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0"></span>
+          <span class="text-xs font-semibold text-gray-600 uppercase tracking-widest">Now</span>
+          <span class="ml-1 text-xs text-gray-400 font-normal">{{ sections.now | length }}</span>
+          <span class="ml-auto text-gray-300 group-hover:text-gray-500 text-xs" x-text="open ? '▲' : '▼'"></span>
+        </button>
+        <div class="space-y-2" id="now-list" x-show="open" x-transition>
+          {% for task in sections.now %}
+            {% set pending = pending_dict.get(task.id) %}
+            {% include "fragments/task_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {# Section THIS WEEK #}
+      {% if sections.week %}
+      <section x-data="{ open: true }">
+        <button
+          type="button"
+          class="w-full flex items-center gap-2 mb-3 group"
+          x-on:click="open = !open"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0"></span>
+          <span class="text-xs font-semibold text-gray-600 uppercase tracking-widest">This week</span>
+          <span class="ml-1 text-xs text-gray-400 font-normal">{{ sections.week | length }}</span>
+          <span class="ml-auto text-gray-300 group-hover:text-gray-500 text-xs" x-text="open ? '▲' : '▼'"></span>
+        </button>
+        <div class="space-y-2" id="week-list" x-show="open" x-transition>
+          {% for task in sections.week %}
+            {% set pending = pending_dict.get(task.id) %}
+            {% include "fragments/task_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {# Section WAITING #}
+      {% if sections.waiting %}
+      <section x-data="{ open: true }">
+        <button
+          type="button"
+          class="w-full flex items-center gap-2 mb-3 group"
+          x-on:click="open = !open"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
+          <span class="text-xs font-semibold text-gray-600 uppercase tracking-widest">Waiting</span>
+          <span class="ml-1 text-xs text-gray-400 font-normal">{{ sections.waiting | length }}</span>
+          <span class="ml-auto text-gray-300 group-hover:text-gray-500 text-xs" x-text="open ? '▲' : '▼'"></span>
+        </button>
+        <div class="space-y-2" id="waiting-list" x-show="open" x-transition>
+          {% for task in sections.waiting %}
+            {% set pending = pending_dict.get(task.id) %}
+            {% include "fragments/task_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {# Section VEILLE — repliée par défaut (basse priorité).
+         x-cloak évite le flash du contenu avant l'init Alpine. #}
+      {% if sections.veille %}
+      <section x-data="{ open: false }">
+        <button
+          type="button"
+          class="w-full flex items-center gap-2 mb-3 group"
+          x-on:click="open = !open"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0"></span>
+          <span class="text-xs font-semibold text-gray-600 uppercase tracking-widest">Veille</span>
+          <span class="ml-1 text-xs text-gray-400 font-normal">{{ sections.veille | length }}</span>
+          <span class="ml-auto text-gray-300 group-hover:text-gray-500 text-xs" x-text="open ? '▲' : '▼'"></span>
+        </button>
+        <div class="space-y-2" id="veille-list" x-show="open" x-cloak x-transition>
+          {% for task in sections.veille %}
+            {% set pending = pending_dict.get(task.id) %}
+            {% include "fragments/task_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {# Section INBOX — header conditionnelle, mais #inbox-list toujours présent
+         pour que HTMX puisse y insérer les tâches créées via la conversation. #}
+      <section x-data="{ open: true }">
+        {% if sections.inbox %}
+        <button
+          type="button"
+          class="w-full flex items-center gap-2 mb-3 group"
+          x-on:click="open = !open"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0"></span>
+          <span class="text-xs font-semibold text-gray-600 uppercase tracking-widest">Inbox</span>
+          <span class="ml-1 rounded-full bg-orange-100 text-orange-600 text-xs px-1.5 py-0.5 font-medium">{{ sections.inbox | length }}</span>
+          <span class="ml-auto text-gray-300 group-hover:text-gray-500 text-xs" x-text="open ? '▲' : '▼'"></span>
+        </button>
+        {% endif %}
+        <div class="space-y-2" id="inbox-list" x-show="open" x-transition>
+          {% for task in sections.inbox %}
+            {% set pending = pending_dict.get(task.id) %}
+            {% include "fragments/task_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+
+      {# État vide global #}
+      {% set any_tasks = sections.now or sections.week or sections.waiting or sections.veille or sections.inbox %}
+      {% if not any_tasks %}
+      <div class="flex flex-col items-center justify-center py-24 text-center">
+        <div class="text-4xl mb-4">✓</div>
+        <p class="text-gray-500 font-medium">Tout est à jour.</p>
+        <p class="text-sm text-gray-400 mt-1">Saisis une tâche en bas pour commencer.</p>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -151,7 +151,7 @@ async def test_fallback_on_llm_parse_error(db_with_data: AsyncSession) -> None:
     llm = make_mock_llm(raises=LLMParseError("JSON invalide"))
     classification, llm_result = await classify_task("Tâche", None, db_with_data, llm=llm)
 
-    assert classification.category == "inbox"
+    assert classification.category is None          # était "inbox"
     assert classification.confidence == 0.0
     assert "LLMParseError" in classification.reasoning
     assert llm_result is None
@@ -162,7 +162,7 @@ async def test_fallback_on_llm_transport_error(db_with_data: AsyncSession) -> No
     llm = make_mock_llm(raises=LLMTransportError("Timeout"))
     classification, llm_result = await classify_task("Tâche", None, db_with_data, llm=llm)
 
-    assert classification.category == "inbox"
+    assert classification.category is None          # était "inbox"
     assert "LLMTransportError" in classification.reasoning
     assert llm_result is None
 

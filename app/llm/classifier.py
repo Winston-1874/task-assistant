@@ -62,9 +62,9 @@ async def classify_task(
         return result.data, result
 
     except (LLMParseError, LLMTransportError) as e:
-        logger.warning("Classification fallback inbox: %s", e)
+        logger.warning("Classification fallback: %s", e)
         fallback = Classification(
-            category="inbox",
+            category=None,
             urgency="normale",
             confidence=0.0,
             reasoning=f"Fallback automatique : {type(e).__name__}",

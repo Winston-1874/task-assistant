@@ -204,12 +204,12 @@ async def correct_task(
     new_value: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    _ALLOWED_CORRECTION_FIELDS = {"urgency", "category", "due_date", "context_id"}
+    _ALLOWED_CORRECTION_FIELDS = {"urgency", "category", "due_date", "context_id", "reasoning"}
     if field not in _ALLOWED_CORRECTION_FIELDS:
         raise HTTPException(status_code=400, detail=f"Champ inconnu: {field}")
 
     task = await _get_task_or_404(db, task_id)
-    old_value = str(getattr(task, field, ""))
+    old_value = str(getattr(task, field if field != "reasoning" else "llm_reasoning", ""))
 
     if field == "urgency":
         if new_value not in {"critique", "haute", "normale", "basse"}:
@@ -233,6 +233,8 @@ async def correct_task(
                 raise HTTPException(status_code=422, detail=f"context_id invalide: {new_value}")
         else:
             task.context_id = None
+    elif field == "reasoning":
+        task.llm_reasoning = new_value or None
 
     task.was_corrected = 1
     task.needs_review = 0

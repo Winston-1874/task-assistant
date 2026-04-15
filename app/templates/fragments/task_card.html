@@ -1,6 +1,33 @@
 {# Fragment réutilisable — inclus dans index.html et retourné par les endpoints HTMX #}
 {# Variables attendues : task, pending (PendingPrompt|None), today (date) #}
 
+{% if task.llm_pending %}
+{# ------------------------------------------------------------------ #}
+{# Mode classifying : spinner squelette, polling toutes les 2s         #}
+{# ------------------------------------------------------------------ #}
+<div id="task-{{ task.id }}"
+     hx-get="/fragments/tasks/{{ task.id }}/status"
+     hx-trigger="every 2s"
+     hx-target="#task-{{ task.id }}"
+     hx-swap="outerHTML"
+     class="bg-white rounded-lg border border-gray-200 border-l-4 border-l-gray-300 shadow-sm animate-pulse">
+  <div class="px-4 py-3 flex items-center gap-3">
+    <svg class="w-4 h-4 text-gray-300 animate-spin shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+    </svg>
+    <div class="flex-1">
+      <div class="h-3 bg-gray-200 rounded w-3/4 mb-2"></div>
+      <div class="h-2 bg-gray-100 rounded w-1/2"></div>
+    </div>
+  </div>
+</div>
+
+{% else %}
+{# ------------------------------------------------------------------ #}
+{# Carte normale                                                        #}
+{# ------------------------------------------------------------------ #}
+
 {% set urgency_border = {
   "critique": "border-l-red-500",
   "haute":    "border-l-orange-400",
@@ -9,27 +36,21 @@
 }.get(task.urgency, "border-l-gray-200") %}
 
 {% set urgency_label = {
-  "critique": ("Critique", "text-red-600 bg-red-50"),
-  "haute":    ("Haute",    "text-orange-600 bg-orange-50"),
-  "normale":  ("Normale",  "text-blue-600 bg-blue-50"),
-  "basse":    ("Basse",    "text-gray-500 bg-gray-100"),
-}.get(task.urgency, ("—", "text-gray-400 bg-gray-50")) %}
+  "critique": ("Critique", "text-red-700 bg-red-50"),
+  "haute":    ("Haute",    "text-orange-700 bg-orange-50"),
+  "normale":  ("Normale",  "text-blue-700 bg-blue-50"),
+  "basse":    ("Basse",    "text-gray-600 bg-gray-100"),
+}.get(task.urgency, ("—", "text-gray-500 bg-gray-50")) %}
 
 <div
   id="task-{{ task.id }}"
   data-title="{{ task.title | truncate(40, true, '…') | e }}"
-  x-data="{ visible: true, submitting: false }"
+  x-data="{ visible: true, submitting: false, expanded: false, correctingReasoning: false }"
   x-show="visible"
   x-transition:leave="transition duration-150"
   x-transition:leave-start="opacity-100"
   x-transition:leave-end="opacity-0"
   class="group bg-white rounded-lg border border-gray-200 border-l-4 {{ urgency_border }} shadow-sm hover:shadow transition-shadow"
-  {% if task.llm_pending %}
-  hx-get="/fragments/tasks/{{ task.id }}/status"
-  hx-trigger="every 2s"
-  hx-target="#task-{{ task.id }}"
-  hx-swap="outerHTML"
-  {% endif %}
 >
 
   {# Bandeau pending prompt #}
@@ -116,17 +137,17 @@
       <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
 
         {% if task.category %}
-        <span class="text-xs text-gray-400 truncate max-w-[12rem]">{{ task.category | truncate(30, true, '…') }}</span>
+        <span class="text-xs text-gray-500 truncate max-w-[12rem]">{{ task.category | truncate(30, true, '…') }}</span>
         {% endif %}
 
         {% if task.due_date %}
-        <span class="text-xs {% if task.due_date <= today %}text-red-500 font-medium{% else %}text-gray-400{% endif %}">
+        <span class="text-xs {% if task.due_date <= today %}text-red-600 font-medium{% else %}text-gray-500{% endif %}">
           {{ task.due_date.strftime('%d/%m') }}
         </span>
         {% endif %}
 
         {% if task.estimated_minutes %}
-        <span class="text-xs text-gray-300">~{{ task.estimated_minutes }}min</span>
+        <span class="text-xs text-gray-500">~{{ task.estimated_minutes }}min</span>
         {% endif %}
 
         {% if task.urgency and task.urgency != 'normale' %}
@@ -134,14 +155,56 @@
         {% endif %}
 
         {% if task.needs_review %}
-        <span class="text-xs text-amber-500 font-medium">⚠ à revoir</span>
+        <span class="text-xs text-amber-600 font-medium">⚠ à revoir</span>
         {% endif %}
 
       </div>
 
-      {# Raisonnement LLM (optionnel) #}
+      {# Raisonnement LLM avec toggle #}
       {% if task.llm_reasoning %}
-      <p class="text-xs text-gray-400 mt-1 italic leading-relaxed line-clamp-2">{{ task.llm_reasoning | truncate(120, true, '…') }}</p>
+      <div class="mt-1">
+        <p class="text-xs text-gray-500 italic leading-relaxed"
+           x-show="expanded || {{ 'true' if task.llm_reasoning | length <= 120 else 'false' }}">
+          {{ task.llm_reasoning }}
+        </p>
+        {% if task.llm_reasoning | length > 120 %}
+        <p class="text-xs text-gray-500 italic leading-relaxed line-clamp-2"
+           x-show="!expanded">
+          {{ task.llm_reasoning }}
+        </p>
+        <button type="button"
+                class="text-xs text-gray-400 hover:text-gray-600 mt-0.5"
+                x-on:click="expanded = !expanded"
+                x-text="expanded ? 'voir moins' : 'voir plus'">
+        </button>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {# Bouton Corriger IA — visible si reasoning défini #}
+      {% if task.llm_reasoning %}
+      <button type="button"
+              class="mt-1 text-xs text-gray-600 hover:text-blue-600 transition-colors"
+              title="Corriger le raisonnement IA"
+              x-on:click="correctingReasoning = !correctingReasoning">
+        🧠 <span x-text="correctingReasoning ? 'Annuler' : 'Corriger IA'">Corriger IA</span>
+      </button>
+
+      <div x-show="correctingReasoning" class="mt-2">
+        <form hx-post="/fragments/tasks/{{ task.id }}/correct"
+              hx-target="#task-{{ task.id }}"
+              hx-swap="outerHTML">
+          <input type="hidden" name="field" value="reasoning">
+          <textarea name="new_value"
+                    class="w-full text-xs border border-gray-200 rounded p-1.5 text-gray-700 resize-none focus:outline-none focus:ring-1 focus:ring-blue-300"
+                    rows="3"
+                    placeholder="Correction du raisonnement IA…">{{ task.llm_reasoning }}</textarea>
+          <button type="submit"
+                  class="mt-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-0.5 rounded transition-colors">
+            Enregistrer
+          </button>
+        </form>
+      </div>
       {% endif %}
 
     </div>
@@ -152,7 +215,7 @@
       <button
         type="button"
         title="Corriger"
-        class="p-1 rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-colors text-xs"
+        class="p-1 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors text-xs"
         x-data
         x-on:click="$dispatch('open-correction', { taskId: {{ task.id }} })"
       >✎</button>
@@ -160,7 +223,7 @@
       <button
         type="button"
         title="Supprimer"
-        class="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors text-xs"
+        class="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors text-xs"
         x-on:click="
           visible = false;
           $store.undo.push(
@@ -178,3 +241,5 @@
 
   </div>
 </div>
+
+{% endif %}

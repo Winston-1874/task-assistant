@@ -180,8 +180,9 @@ async def test_create_task_returns_card(
         )
 
     assert response.status_code == 200
-    assert "TVA AGRIWAN" in response.text
+    # La carte est retournée en mode spinner (llm_pending=True), le titre n'est pas visible
     assert "task-" in response.text
+    assert "hx-trigger" in response.text
 
 
 @pytest.mark.asyncio
@@ -495,7 +496,8 @@ async def test_conversation_new_task(
         )
 
     assert response.status_code == 200
-    assert "Faire la TVA AGRIWAN" in response.text
+    # La carte est retournée en mode spinner (llm_pending=True), le titre n'est pas visible immédiatement
+    assert "task-" in response.text
 
 
 @pytest.mark.asyncio
@@ -539,7 +541,8 @@ async def test_conversation_parse_returns_card_immediately(client, auth_cookies,
         cookies=auth_cookies,
     )
     assert response.status_code == 200
-    assert "TVA AGRIWAN" in response.text
+    # La carte est retournée en mode spinner (llm_pending=True), le titre n'est pas visible immédiatement
+    assert "animate-pulse" in response.text
 
 
 @pytest.mark.asyncio

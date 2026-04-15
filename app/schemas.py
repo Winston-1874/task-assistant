@@ -1,7 +1,22 @@
 from datetime import date
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_URGENCY_ALIASES: dict[str, str] = {
+    "urgent": "critique",
+    "critical": "critique",
+    "high": "haute",
+    "medium": "normale",
+    "normal": "normale",
+    "low": "basse",
+}
+
+_CONFIDENCE_ALIASES: dict[str, float] = {
+    "high": 0.9,
+    "medium": 0.6,
+    "low": 0.3,
+}
 
 
 class Intent(BaseModel):
@@ -9,9 +24,16 @@ class Intent(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     payload: dict[str, Any]
 
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _normalize_payload(cls, v: Any) -> dict[str, Any]:
+        if isinstance(v, dict):
+            return v
+        return {"raw": v}
+
 
 class Classification(BaseModel):
-    category: str  # nom existant ou "NEW:<nom>"
+    category: str | None = None  # nom existant, "NEW:<nom>", ou None (fallback)
     context_id: int | None = None
     context_suggestion: str | None = None
     urgency: Literal["critique", "haute", "normale", "basse"]
@@ -21,6 +43,24 @@ class Classification(BaseModel):
     tags: Annotated[list[str], Field(max_length=5)] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+
+    @field_validator("urgency", mode="before")
+    @classmethod
+    def _normalize_urgency(cls, v: Any) -> str:
+        if isinstance(v, str):
+            normalized = v.lower().strip()
+            return _URGENCY_ALIASES.get(normalized, normalized)
+        return v
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, v: Any) -> float:
+        if isinstance(v, str):
+            lower = v.lower().strip()
+            if lower in _CONFIDENCE_ALIASES:
+                return _CONFIDENCE_ALIASES[lower]
+            return float(lower)
+        return v
 
 
 # ---------------------------------------------------------------------------
@@ -44,13 +84,12 @@ class SignalPriority(BaseModel):
 class SignalResponse(BaseModel):
     """Réponse LLM pour generate_signal — wrappée pour json_object."""
 
-    # default_factory : résiste au cas où le LLM omet la clé (retourne {})
     priorities: list[SignalPriority] = Field(default_factory=list)
 
 
 class DigestContent(BaseModel):
     """Réponse LLM pour le digest matinal."""
 
-    summary: str  # 2-4 phrases résumant la journée
-    top_tasks: list[str] = Field(default_factory=list)  # titres des 3-5 tâches clés
-    alert: str | None = None  # surcharge capacité ou zombie critique
+    summary: str
+    top_tasks: list[str] = Field(default_factory=list)
+    alert: str | None = None

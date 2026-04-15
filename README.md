@@ -5,7 +5,7 @@ Saisie conversationnelle libre → classification automatique → priorisation q
 
 ## Fonctionnalités
 
-- **Saisie libre** : tape "appeler AGRIWAN pour la TVA avant vendredi" → LLM catégorise, détecte l'urgence, propose une échéance
+- **Saisie libre** : tape "appeler NewCo pour la TVA avant vendredi" → LLM catégorise, détecte l'urgence, propose une échéance
 - **Sections** : NOW / CETTE SEMAINE / EN ATTENTE / VEILLE / INBOX
 - **Digest matinal** à 7h00 : résumé du jour généré par LLM
 - **Détection zombies** : tâches qui traînent → invite à décider

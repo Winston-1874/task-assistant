@@ -32,6 +32,9 @@ PROGRESS.md
 *.swp
 *~
 
+# Worktrees
+.worktrees/
+
 # OS
 .DS_Store
 Thumbs.db

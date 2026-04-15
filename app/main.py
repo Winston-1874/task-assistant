@@ -24,6 +24,7 @@ from app.auth import NotAuthenticatedException
 from app.routes import auth as auth_router
 from app.routes import conversation as conversation_router
 from app.routes import fragments as fragments_router
+from app.routes import settings as settings_router
 from app.routes import tasks as tasks_router
 from app.scheduler import create_scheduler
 from app.seed import seed_initial_data
@@ -43,6 +44,17 @@ async def lifespan(app: FastAPI):
         raise
     logger.info("Migrations Alembic appliquées (ou déjà à jour)")
     await seed_initial_data()
+    # Charger l'override de modèle LLM depuis la DB si présent
+    from app.db import get_db_session
+    from app.models import Setting as SettingModel
+    from sqlalchemy import select as sa_select
+    async with get_db_session() as _db:
+        _r = await _db.execute(sa_select(SettingModel).where(SettingModel.key == "llm_model"))
+        _row = _r.scalar_one_or_none()
+        if _row:
+            from app.config import settings as _settings
+            _settings.llm_model = _row.value
+            logger.info("Modèle LLM overridé depuis DB → %s", _row.value)
     scheduler = create_scheduler()
     scheduler.start()
     logger.info("task-assistant démarré (scheduler actif : %d jobs)", len(scheduler.get_jobs()))
@@ -73,3 +85,4 @@ app.include_router(auth_router.router)          # /login, /logout — public
 app.include_router(tasks_router.router)          # /, /week, /waiting, /inbox — protégé
 app.include_router(fragments_router.router)      # /fragments/* — protégé
 app.include_router(conversation_router.router)   # /conversation/* — protégé
+app.include_router(settings_router.router)       # /settings, /fragments/settings/* — protégé

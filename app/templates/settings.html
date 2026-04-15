@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration — Tasks{% endblock %}
+
+{% block content %}
+<div class="flex-1 overflow-y-auto">
+  <div class="max-w-lg mx-auto px-4 py-10 space-y-8">
+
+    <div>
+      <a href="/" class="text-xs text-gray-500 hover:text-gray-700 transition-colors">← Retour</a>
+      <h1 class="mt-3 text-lg font-semibold text-gray-800">Configuration</h1>
+    </div>
+
+    <section class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+      <h2 class="text-sm font-semibold text-gray-700">Modèle LLM (OpenRouter)</h2>
+      <p class="text-xs text-gray-500">
+        Identifiant du modèle tel qu'affiché sur
+        <span class="font-mono text-gray-600">openrouter.ai/models</span>
+        (ex. <span class="font-mono text-gray-600">google/gemini-2.5-flash</span>).
+      </p>
+
+      <div x-data="{ model: '{{ current_model | e }}' }" class="space-y-3">
+        <input
+          type="text"
+          x-model="model"
+          placeholder="google/gemini-2.5-flash"
+          class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800
+                 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400
+                 focus:border-transparent transition-colors"
+        />
+
+        <div class="flex gap-2">
+          <button
+            type="button"
+            hx-post="/fragments/settings/model/test"
+            hx-include="[name='model']"
+            hx-target="#model-result"
+            hx-swap="innerHTML"
+            :disabled="!model.trim()"
+            class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700
+                   hover:bg-gray-50 hover:border-gray-400 transition-colors disabled:opacity-40"
+          >
+            <input type="hidden" name="model" :value="model">
+            Tester
+          </button>
+          <button
+            type="button"
+            hx-post="/fragments/settings/model/save"
+            hx-include="[name='model']"
+            hx-target="#model-result"
+            hx-swap="innerHTML"
+            :disabled="!model.trim()"
+            class="rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white
+                   hover:bg-blue-700 transition-colors disabled:opacity-40"
+          >
+            Enregistrer
+          </button>
+        </div>
+
+        <div id="model-result"></div>
+      </div>
+    </section>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block conversation %}{% endblock %}

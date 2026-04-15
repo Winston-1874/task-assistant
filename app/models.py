@@ -67,6 +67,7 @@ class Task(Base):
     was_corrected: Mapped[int] = mapped_column(Integer, default=0)
     postponed_count: Mapped[int] = mapped_column(Integer, default=0)
     needs_review: Mapped[int] = mapped_column(Integer, default=0)
+    llm_pending: Mapped[bool] = mapped_column(Boolean, default=False)
 
     category_rel: Mapped["Category | None"] = relationship(back_populates="tasks")
     context: Mapped["Context | None"] = relationship(back_populates="tasks")

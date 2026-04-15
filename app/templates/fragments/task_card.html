@@ -168,9 +168,9 @@
           {{ task.llm_reasoning }}
         </p>
         {% if task.llm_reasoning | length > 120 %}
-        <p class="text-xs text-gray-500 italic leading-relaxed line-clamp-2"
+        <p class="text-xs text-gray-500 italic leading-relaxed"
            x-show="!expanded">
-          {{ task.llm_reasoning }}
+          {{ task.llm_reasoning[:120] }}…
         </p>
         <button type="button"
                 class="text-xs text-gray-400 hover:text-gray-600 mt-0.5"

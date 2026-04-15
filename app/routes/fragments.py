@@ -20,7 +20,7 @@ from app.db import get_db
 from app.llm.proactive import generate_signal  # ask_due_date used via _classify_and_update
 from app.memory import record_correction
 from app.models import PendingPrompt, Task
-from app.routes.conversation import _classify_and_update, _resolve_category
+from app.routes.conversation import _classify_and_update
 from app.templates_config import templates
 
 logger = logging.getLogger(__name__)

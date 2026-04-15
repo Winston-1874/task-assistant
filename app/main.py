@@ -20,7 +20,12 @@ _STATIC_DIR = Path(__file__).parent / "static"
 # alembic.ini est à la racine du projet, deux niveaux au-dessus de ce fichier
 _ALEMBIC_INI = Path(__file__).parent.parent / "alembic.ini"
 
+from sqlalchemy import select as sa_select
+
 from app.auth import NotAuthenticatedException
+from app.config import settings as _settings
+from app.db import get_db_session
+from app.models import Setting as SettingModel
 from app.routes import auth as auth_router
 from app.routes import conversation as conversation_router
 from app.routes import fragments as fragments_router
@@ -45,14 +50,10 @@ async def lifespan(app: FastAPI):
     logger.info("Migrations Alembic appliquées (ou déjà à jour)")
     await seed_initial_data()
     # Charger l'override de modèle LLM depuis la DB si présent
-    from app.db import get_db_session
-    from app.models import Setting as SettingModel
-    from sqlalchemy import select as sa_select
     async with get_db_session() as _db:
         _r = await _db.execute(sa_select(SettingModel).where(SettingModel.key == "llm_model"))
         _row = _r.scalar_one_or_none()
         if _row:
-            from app.config import settings as _settings
             _settings.llm_model = _row.value
             logger.info("Modèle LLM overridé depuis DB → %s", _row.value)
     scheduler = create_scheduler()

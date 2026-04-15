@@ -10,6 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
@@ -62,7 +63,6 @@ async def save_model(model: str = Form(...), db: AsyncSession = Depends(get_db))
     if not model:
         return _result_html(ok=False, message="Le nom du modèle est vide.")
 
-    from sqlalchemy import select
     result = await db.execute(select(Setting).where(Setting.key == "llm_model"))
     row = result.scalar_one_or_none()
     if row is None:
@@ -71,6 +71,9 @@ async def save_model(model: str = Form(...), db: AsyncSession = Depends(get_db))
         row.value = model
     await db.commit()
 
+    # Note : mutation du singleton en mémoire — fonctionne en mono-process (dev/prod single-worker).
+    # En multi-workers, les autres workers voient le changement au prochain redémarrage
+    # (le lifespan recharge depuis DB). Acceptable pour cet usage.
     settings.llm_model = model
     logger.info("Modèle LLM changé → %s", model)
 

@@ -46,6 +46,15 @@ def auth_cookies():
     return {"session": create_session_cookie()}
 
 
+@pytest.fixture(autouse=True)
+def restore_llm_model():
+    """Restaure settings.llm_model après chaque test pour éviter la pollution."""
+    from app.config import settings
+    original = settings.llm_model
+    yield
+    settings.llm_model = original
+
+
 @pytest.mark.asyncio
 async def test_settings_page_loads(client, auth_cookies):
     """GET /settings retourne 200 avec le modèle courant."""
@@ -83,7 +92,8 @@ async def test_test_model_ok(client, auth_cookies):
             cookies=auth_cookies,
         )
     assert response.status_code == 200
-    assert "OK" in response.text or "ok" in response.text.lower()
+    assert "text-green-700" in response.text
+    assert "répond correctement" in response.text
 
 
 @pytest.mark.asyncio

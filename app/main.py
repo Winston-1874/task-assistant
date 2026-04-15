@@ -6,6 +6,7 @@ Exception handler : NotAuthenticatedException → redirect /login.
 Routers : auth (public), tasks (protégé), fragments (protégé), conversation (protégé).
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -42,7 +43,9 @@ async def lifespan(app: FastAPI):
     # env.py override sqlalchemy.url depuis settings.database_url au runtime
     alembic_cfg = Config(str(_ALEMBIC_INI))
     try:
-        command.upgrade(alembic_cfg, "head")
+        # command.upgrade est synchrone et env.py utilise asyncio.run().
+        # Pour éviter le conflit avec la loop du lifespan, exécuter dans un thread.
+        await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
     except Exception:
         logger.critical("Échec de la migration Alembic — démarrage interrompu", exc_info=True)
         raise

@@ -1,18 +1,31 @@
 services:
   app:
     build: .
+    container_name: task-assistant
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     volumes:
       - ./data:/app/data
     env_file:
-      - .env
+      - .env.app
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/tasks.db
+    networks:
+      - traefik-public
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/login"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.task-assistant.rule=Host(`todo.renaud.ai`)"
+      - "traefik.http.routers.task-assistant.entrypoints=websecure"
+      - "traefik.http.routers.task-assistant.tls=true"
+      - "traefik.http.routers.task-assistant.tls.certresolver=letsencrypt"
+      - "traefik.http.services.task-assistant.loadbalancer.server.port=8000"
+
+networks:
+  traefik-public:
+    external: true

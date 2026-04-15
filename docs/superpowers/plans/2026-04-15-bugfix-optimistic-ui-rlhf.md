@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Corriger les violations FK et erreurs de parsing LLM, afficher les cartes de tâches immédiatement avec un spinner pendant la classification async, et permettre à l'utilisateur de corriger le raisonnement de l'IA pour l'injecter comme few-shots.
+**Goal:** Corriger les violations FK et erreurs de parsing LLM, afficher les cartes de tâches immédiatement avec un spinner pendant la classification async, permettre à l'utilisateur de corriger le raisonnement de l'IA, et offrir un écran de configuration simple du modèle LLM.
 
-**Architecture:** FastAPI `BackgroundTasks` pour la classification async ; validators Pydantic `mode="before"` pour normaliser les réponses LLM non conformes ; HTMX polling côté client pour rafraîchir la carte quand la classification est prête ; table `corrections` existante étendue au champ `reasoning`.
+**Architecture:** FastAPI `BackgroundTasks` pour la classification async ; validators Pydantic `mode="before"` pour normaliser les réponses LLM non conformes ; HTMX polling côté client pour rafraîchir la carte ; table `Setting` existante pour persister le modèle LLM courant, overridé en mémoire au lifespan.
 
 **Tech Stack:** FastAPI, SQLAlchemy async (aiosqlite), Pydantic v2, HTMX 2, Alpine.js 3, Alembic, pytest-asyncio
 
@@ -21,11 +21,401 @@
 | `migrations/versions/xxxx_add_llm_pending.py` | Migration Alembic |
 | `app/routes/conversation.py` | BackgroundTasks + optimistic save + helper `_resolve_category` |
 | `app/routes/fragments.py` | BackgroundTasks + poll endpoint + reasoning correction |
+| `app/routes/settings.py` | Nouveau — page config + endpoints test/save modèle |
 | `app/templates/fragments/task_card.html` | Mode classifying + toggle reasoning + bouton Corriger IA |
+| `app/templates/settings.html` | Nouveau — page configuration modèle |
+| `app/main.py` | Override llm_model depuis DB au lifespan + inclure router settings |
 | `app/memory.py` | Inclure corrections `field="reasoning"` dans few-shots |
 | `tests/test_classifier.py` | Mise à jour assertions fallback (inbox → None) |
 | `tests/test_schemas.py` | Nouveau fichier — tests validators |
 | `tests/test_routes.py` | Tests optimistic UI + poll endpoint |
+| `tests/test_settings_route.py` | Nouveau — tests page config modèle |
+
+---
+
+## Task 0 : Configuration modèle LLM (indépendante)
+
+**Files:**
+- Create: `app/routes/settings.py`
+- Create: `app/templates/settings.html`
+- Modify: `app/main.py`
+- Modify: `app/templates/base.html`
+- Create: `tests/test_settings_route.py`
+
+### Contexte technique
+
+`settings.llm_model` est un attribut du singleton Pydantic `Settings` (défini dans `app/config.py`). Le client LLM lit `settings.llm_model` à chaque appel (`app/llm/client.py:95`), pas dans son constructeur. Changer `settings.llm_model` en mémoire suffit — pas besoin de recréer le client.
+
+La table `settings` existe déjà (`app/models.py:167`) : `key TEXT PRIMARY KEY, value TEXT NOT NULL`. On y stocke `key="llm_model"`.
+
+- [ ] **Step 1 : Écrire les tests qui échouent**
+
+Créer `tests/test_settings_route.py` :
+
+```python
+"""Tests de la page de configuration modèle LLM."""
+import pytest
+from unittest.mock import AsyncMock, patch
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.auth import create_session_cookie
+from app.db import Base, get_db
+from app.main import app
+
+
+@pytest.fixture
+async def db_engine():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def db_session(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    try:
+        yield session
+    finally:
+        await session.close()
+
+
+@pytest.fixture
+async def client(db_session: AsyncSession):
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def auth_cookies():
+    return {"session": create_session_cookie()}
+
+
+@pytest.mark.asyncio
+async def test_settings_page_loads(client, auth_cookies):
+    """GET /settings retourne 200 avec le modèle courant."""
+    response = await client.get("/settings", cookies=auth_cookies)
+    assert response.status_code == 200
+    assert "llm_model" in response.text or "gemini" in response.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_save_model_updates_settings(client, auth_cookies):
+    """POST /fragments/settings/model/save persiste le modèle."""
+    response = await client.post(
+        "/fragments/settings/model/save",
+        data={"model": "openai/gpt-4o"},
+        cookies=auth_cookies,
+    )
+    assert response.status_code == 200
+    assert "openai/gpt-4o" in response.text
+
+    # Vérifier que settings.llm_model a été mis à jour en mémoire
+    from app.config import settings
+    assert settings.llm_model == "openai/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_test_model_ok(client, auth_cookies):
+    """POST /fragments/settings/model/test retourne succès si LLM répond."""
+    with patch("app.routes.settings.get_llm_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.structured_complete = AsyncMock(return_value=None)
+        mock_factory.return_value = mock_client
+
+        response = await client.post(
+            "/fragments/settings/model/test",
+            data={"model": "google/gemini-2.5-flash"},
+            cookies=auth_cookies,
+        )
+    assert response.status_code == 200
+    assert "OK" in response.text or "ok" in response.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_test_model_error(client, auth_cookies):
+    """POST /fragments/settings/model/test retourne erreur si LLM échoue."""
+    from app.llm.client import LLMTransportError
+    with patch("app.routes.settings.get_llm_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.structured_complete = AsyncMock(side_effect=LLMTransportError("timeout"))
+        mock_factory.return_value = mock_client
+
+        response = await client.post(
+            "/fragments/settings/model/test",
+            data={"model": "modele/inexistant"},
+            cookies=auth_cookies,
+        )
+    assert response.status_code == 200
+    # Doit contenir une indication d'erreur visible
+    assert "erreur" in response.text.lower() or "error" in response.text.lower() or "échec" in response.text.lower()
+```
+
+- [ ] **Step 2 : Lancer les tests pour voir les échecs**
+
+```bash
+cd /home/ambiorix/task-assistant && python -m pytest tests/test_settings_route.py -v 2>&1 | head -30
+```
+
+Attendu : `FAILED` (routes inexistantes).
+
+- [ ] **Step 3 : Créer `app/routes/settings.py`**
+
+```python
+"""
+Route configuration — GET /settings, POST /fragments/settings/model/test|save.
+
+Permet de changer le modèle LLM OpenRouter sans redémarrer l'app.
+"""
+
+import html
+import logging
+
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth import require_auth
+from app.config import settings
+from app.db import get_db
+from app.llm.client import LLMError, get_llm_client
+from app.models import Setting
+from app.templates_config import templates
+
+logger = logging.getLogger(__name__)
+router = APIRouter(dependencies=[Depends(require_auth)])
+
+
+@router.get("/settings")
+async def settings_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {"current_model": settings.llm_model},
+    )
+
+
+@router.post("/fragments/settings/model/test", response_class=HTMLResponse)
+async def test_model(model: str = Form(...)):
+    """Envoie un appel LLM minimal pour vérifier que le modèle répond."""
+    model = model.strip()
+    if not model:
+        return _result_html(ok=False, message="Le nom du modèle est vide.")
+
+    class _Ping(BaseModel):
+        ok: bool = True
+
+    llm = get_llm_client()
+    try:
+        await llm.structured_complete(
+            messages=[{"role": "user", "content": 'Réponds uniquement avec {"ok": true}'}],
+            schema=_Ping,
+            model=model,
+        )
+        return _result_html(ok=True, message=f"Modèle « {html.escape(model)} » répond correctement.")
+    except LLMError as e:
+        logger.warning("Test modèle %r échoué : %s", model, e)
+        return _result_html(ok=False, message=f"Échec : {html.escape(str(e)[:200])}")
+
+
+@router.post("/fragments/settings/model/save", response_class=HTMLResponse)
+async def save_model(model: str = Form(...), db: AsyncSession = Depends(get_db)):
+    """Persiste le modèle dans la table settings et met à jour le singleton en mémoire."""
+    model = model.strip()
+    if not model:
+        return _result_html(ok=False, message="Le nom du modèle est vide.")
+
+    # Upsert dans la table settings
+    from sqlalchemy import select
+    result = await db.execute(select(Setting).where(Setting.key == "llm_model"))
+    row = result.scalar_one_or_none()
+    if row is None:
+        db.add(Setting(key="llm_model", value=model))
+    else:
+        row.value = model
+    await db.commit()
+
+    # Override en mémoire — le client LLM lira la nouvelle valeur au prochain appel
+    settings.llm_model = model
+    logger.info("Modèle LLM changé → %s", model)
+
+    return _result_html(ok=True, message=f"Modèle enregistré : « {html.escape(model)} »")
+
+
+def _result_html(ok: bool, message: str) -> HTMLResponse:
+    color = "text-green-700 bg-green-50 border-green-200" if ok else "text-red-700 bg-red-50 border-red-200"
+    icon = "✓" if ok else "✕"
+    return HTMLResponse(
+        f'<p class="text-sm px-3 py-2 rounded border {color}">{icon} {message}</p>'
+    )
+```
+
+- [ ] **Step 4 : Créer `app/templates/settings.html`**
+
+```html
+{% extends "base.html" %}
+
+{% block title %}Configuration — Tasks{% endblock %}
+
+{% block content %}
+<div class="flex-1 overflow-y-auto">
+  <div class="max-w-lg mx-auto px-4 py-10 space-y-8">
+
+    <div>
+      <a href="/" class="text-xs text-gray-500 hover:text-gray-700 transition-colors">← Retour</a>
+      <h1 class="mt-3 text-lg font-semibold text-gray-800">Configuration</h1>
+    </div>
+
+    <section class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+      <h2 class="text-sm font-semibold text-gray-700">Modèle LLM (OpenRouter)</h2>
+      <p class="text-xs text-gray-500">
+        Identifiant du modèle tel qu'affiché sur
+        <span class="font-mono text-gray-600">openrouter.ai/models</span>
+        (ex. <span class="font-mono text-gray-600">google/gemini-2.5-flash</span>).
+      </p>
+
+      <div x-data="{ model: '{{ current_model | e }}' }" class="space-y-3">
+        <input
+          type="text"
+          x-model="model"
+          placeholder="google/gemini-2.5-flash"
+          class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800
+                 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400
+                 focus:border-transparent transition-colors"
+        />
+
+        <div class="flex gap-2">
+          <button
+            type="button"
+            hx-post="/fragments/settings/model/test"
+            hx-include="[name='model']"
+            hx-target="#model-result"
+            hx-swap="innerHTML"
+            :disabled="!model.trim()"
+            class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700
+                   hover:bg-gray-50 hover:border-gray-400 transition-colors disabled:opacity-40"
+          >
+            <input type="hidden" name="model" :value="model">
+            Tester
+          </button>
+          <button
+            type="button"
+            hx-post="/fragments/settings/model/save"
+            hx-include="[name='model']"
+            hx-target="#model-result"
+            hx-swap="innerHTML"
+            :disabled="!model.trim()"
+            class="rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white
+                   hover:bg-blue-700 transition-colors disabled:opacity-40"
+          >
+            Enregistrer
+          </button>
+        </div>
+
+        <div id="model-result"></div>
+      </div>
+    </section>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block conversation %}{% endblock %}
+```
+
+- [ ] **Step 5 : Enregistrer le router dans `app/main.py`**
+
+Ajouter l'import après les autres imports de routers :
+
+```python
+from app.routes import settings as settings_router
+```
+
+Ajouter l'inclusion après les autres routers :
+
+```python
+app.include_router(settings_router.router)   # /settings, /fragments/settings/* — protégé
+```
+
+- [ ] **Step 6 : Charger l'override DB au démarrage dans `app/main.py`**
+
+Dans la fonction `lifespan`, après `await seed_initial_data()`, ajouter :
+
+```python
+    # Charger l'override de modèle LLM depuis la DB si présent
+    from app.db import get_db_session
+    from app.models import Setting as SettingModel
+    from sqlalchemy import select as sa_select
+    async with get_db_session() as _db:
+        _r = await _db.execute(sa_select(SettingModel).where(SettingModel.key == "llm_model"))
+        _row = _r.scalar_one_or_none()
+        if _row:
+            from app.config import settings as _settings
+            _settings.llm_model = _row.value
+            logger.info("Modèle LLM overridé depuis DB → %s", _row.value)
+```
+
+- [ ] **Step 7 : Ajouter le lien ⚙ dans la nav (`app/templates/base.html`)**
+
+Dans la nav, remplacer :
+
+```html
+    <div class="ml-auto flex items-center gap-3 text-xs">
+      <span class="htmx-indicator text-gray-300 text-xs animate-pulse">●</span>
+      <span class="text-gray-200">|</span>
+      <form method="post" action="/logout" class="inline">
+        <button type="submit" class="text-gray-400 hover:text-gray-700 transition-colors">Déconnexion</button>
+      </form>
+    </div>
+```
+
+par :
+
+```html
+    <div class="ml-auto flex items-center gap-3 text-xs">
+      <span class="htmx-indicator text-gray-300 text-xs animate-pulse">●</span>
+      <span class="text-gray-200">|</span>
+      <a href="/settings" title="Configuration" class="text-gray-500 hover:text-gray-700 transition-colors">⚙</a>
+      <span class="text-gray-200">|</span>
+      <form method="post" action="/logout" class="inline">
+        <button type="submit" class="text-gray-500 hover:text-gray-700 transition-colors">Déconnexion</button>
+      </form>
+    </div>
+```
+
+- [ ] **Step 8 : Lancer les tests**
+
+```bash
+cd /home/ambiorix/task-assistant && python -m pytest tests/test_settings_route.py -v
+```
+
+Attendu : tous `PASSED`.
+
+- [ ] **Step 9 : Lancer la suite complète**
+
+```bash
+cd /home/ambiorix/task-assistant && python -m pytest tests/ -v 2>&1 | tail -20
+```
+
+Attendu : tous `PASSED`.
+
+- [ ] **Step 10 : Commit**
+
+```bash
+cd /home/ambiorix/task-assistant && git add app/routes/settings.py app/templates/settings.html app/main.py app/templates/base.html tests/test_settings_route.py
+git commit -m "feat: add LLM model configuration page with connectivity test"
+```
 
 ---
 
@@ -1198,6 +1588,7 @@ git commit -m "feat: reasoning correction loop — correct endpoint, few-shots i
 
 | Spec | Task |
 |---|---|
+| Page config modèle LLM + test connectivité | Task 0 |
 | FK fallback `category=None` | Task 2 |
 | Validators urgency/confidence/payload | Task 1 |
 | Latent `NEW:` prefix → None | Task 3 |
@@ -1212,6 +1603,8 @@ git commit -m "feat: reasoning correction loop — correct endpoint, few-shots i
 
 ### Cohérence types
 
+- `Setting` model importé dans `settings.py` et `main.py` — même classe `app.models.Setting` ✓
+- `settings.llm_model` muté directement (Pydantic Settings est un objet mutable en mémoire) ✓
 - `Task.llm_pending: Mapped[bool]` défini en Task 4, utilisé en Task 5 et 6 ✓
 - `_resolve_category` définie en Task 3 dans `conversation.py`, importée en Task 5 dans `fragments.py` ✓
 - `_classify_and_update` définie en Task 5 dans `conversation.py`, importée dans `fragments.py` Task 5 ✓

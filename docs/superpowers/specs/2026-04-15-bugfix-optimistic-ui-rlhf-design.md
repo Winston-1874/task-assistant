@@ -167,6 +167,38 @@ Dans `prompts.py`, adapter le formatage few-shots pour afficher les corrections 
 
 ---
 
+## 5. Configuration modèle LLM
+
+### 5a. Persistance
+
+La table `settings` (clé/valeur) existe déjà. Le modèle courant est stocké sous la clé `"llm_model"`. Au démarrage (lifespan), si la clé existe en DB → override `settings.llm_model` (le singleton Pydantic). Le client LLM lit `settings.llm_model` à chaque appel (pas dans le constructeur) : pas besoin de recréer le client.
+
+### 5b. Endpoint
+
+`GET /settings` — page de configuration (lien dans la nav).
+
+`POST /fragments/settings/model/test` — test de connectivité avec le modèle fourni :
+- Appel LLM minimal : `{"role": "user", "content": "Réponds juste {\"ok\": true}"}` avec `max_tokens=20`
+- Succès → fragment HTML vert "Modèle OK"
+- Échec → fragment HTML rouge avec message d'erreur
+
+`POST /fragments/settings/model/save` — enregistre le modèle :
+- Upsert dans `Setting(key="llm_model")` + override `settings.llm_model` en mémoire
+- Retourne confirmation inline
+
+### 5c. UI
+
+Page `/settings` minimale :
+- Titre "Configuration"
+- Label + input text avec valeur courante (`settings.llm_model`), placeholder `google/gemini-2.5-flash`
+- Bouton "Tester" → `hx-post="/fragments/settings/model/test"` → résultat inline (vert/rouge)
+- Bouton "Enregistrer" → `hx-post="/fragments/settings/model/save"` → confirmation inline
+- Lien "← Retour" vers `/`
+
+Lien discret "⚙" dans la nav (à droite, avant "Déconnexion").
+
+---
+
 ## Fichiers modifiés
 
 | Fichier | Changement |
@@ -180,6 +212,9 @@ Dans `prompts.py`, adapter le formatage few-shots pour afficher les corrections 
 | `app/templates/fragments/task_card.html` | Mode classifying + toggle reasoning + bouton corriger IA |
 | `migrations/versions/xxxx_add_llm_pending.py` | Nouvelle migration |
 | `app/memory.py` | Inclure corrections reasoning dans few-shots |
+| `app/routes/settings.py` | Nouveau — page config + endpoints test/save modèle |
+| `app/templates/settings.html` | Nouveau — page configuration modèle |
+| `app/main.py` | Charger override DB au lifespan + inclure router settings |
 
 ---
 
@@ -188,3 +223,4 @@ Dans `prompts.py`, adapter le formatage few-shots pour afficher les corrections 
 - Interface d'administration des catégories
 - Auto-création de nouvelles catégories depuis `NEW:` (risque hallucinations)
 - Vrai worker async (Celery/ARQ) — `BackgroundTasks` FastAPI suffisant à cette échelle
+- Liste des modèles disponibles OpenRouter (pas d'appel API de discovery)

@@ -15,11 +15,6 @@ from alembic.config import Config
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-
-_STATIC_DIR = Path(__file__).parent / "static"
-# alembic.ini est à la racine du projet, deux niveaux au-dessus de ce fichier
-_ALEMBIC_INI = Path(__file__).parent.parent / "alembic.ini"
-
 from sqlalchemy import select as sa_select
 
 from app.auth import NotAuthenticatedException
@@ -33,6 +28,10 @@ from app.routes import settings as settings_router
 from app.routes import tasks as tasks_router
 from app.scheduler import create_scheduler
 from app.seed import seed_initial_data
+
+_STATIC_DIR = Path(__file__).parent / "static"
+# alembic.ini est à la racine du projet, deux niveaux au-dessus de ce fichier
+_ALEMBIC_INI = Path(__file__).parent.parent / "alembic.ini"
 
 logger = logging.getLogger(__name__)
 
